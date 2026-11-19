@@ -34,7 +34,7 @@ jobs:
       - name: Build app (no signing)
         # No shared scheme in this project, so build by target (not -scheme).
         # -derivedDataPath requires -scheme, so it is omitted; the .app lands
-        # in ~/Library/Developer/Xcode/DerivedData and the package step finds it.
+        # in the project-local build dir, DerivedData, or the default DerivedData.
         run: |
           cd Saha
           xcodebuild -project Saha.xcodeproj -target Saha -configuration Release -sdk iphoneos CODE_SIGNING_ALLOWED=NO CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO
@@ -42,18 +42,19 @@ jobs:
       - name: Package IPA
         run: |
           cd Saha
-          APP=$(find build/Release-iphoneos -maxdepth 1 -name "*.app" 2>/dev/null | head -n 1)
-          if [ -z "$APP" ]; then APP=$(find DerivedData/Build/Products/Release-iphoneos -maxdepth 1 -name "*.app" 2>/dev/null | head -n 1); fi
-          if [ -z "$APP" ]; then APP=$(find ~/Library/Developer/Xcode/DerivedData -name "Saha.app" -path "*Release-iphoneos*" 2>/dev/null | head -n 1); fi
-          test -n "$APP" || { echo "ERROR: no .app found"; find ~/Library/Developer/Xcode/DerivedData -maxdepth 3 -type d -name "*Saha*" | head -20; exit 1; }
+          # The built .app can land in three places depending on the runner:
+          # the project-local build dir, DerivedData, or the default DerivedData.
+          APP=$(find build/Release-iphoneos DerivedData/Build/Products/Release-iphoneos -maxdepth 1 -name "*.app" 2>/dev/null | head -n 1)
+          if [ -z "$APP" ]; then APP=$(find ~/Library/Developer/Xcode/DerivedData -name "*.app" -path "*Release-iphoneos*" 2>/dev/null | head -n 1); fi
+          test -n "$APP" || { echo "ERROR: no .app found"; ls -R build 2>/dev/null | head -20; find ~/Library/Developer/Xcode/DerivedData -maxdepth 3 -type d -name "*Jodel*" 2>/dev/null | head -20; exit 1; }
           echo "APP=$APP"
           mkdir -p Payload
           cp -r "$APP" Payload/
-          zip -r ../Saha-unsigned.ipa Payload
-          ls -lh ../Saha-unsigned.ipa
+          zip -r ../JodelZero-unsigned.ipa Payload
+          ls -lh ../JodelZero-unsigned.ipa
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
-          name: Saha-unsigned-ipa
-          path: Saha-unsigned.ipa
+          name: JodelZero-unsigned-ipa
+          path: JodelZero-unsigned.ipa
