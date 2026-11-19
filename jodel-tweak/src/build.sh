@@ -19,8 +19,9 @@ xcrun clang \
   -install_name "@rpath/JodelTweak.dylib" \
   -framework Foundation \
   -framework UIKit \
+  -framework Security \
   -o "$OUT_DIR/JodelTweak.dylib" \
-  JodelTweak.m
+  JodelTweak.m JodelTweakProtection.m
 echo "Built: $OUT_DIR/JodelTweak.dylib"
 file "$OUT_DIR/JodelTweak.dylib"
 ls -lh "$OUT_DIR/JodelTweak.dylib"

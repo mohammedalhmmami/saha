@@ -45,6 +45,7 @@
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
+#import "JodelTweakProtection.h"
 
 // ---------------------------------------------------------------------------
 // Storage key (our own namespace — never touches Jodel's keys).
@@ -351,4 +352,7 @@ static void JodelTweakInstallHooks(void) {
 __attribute__((constructor))
 static void JodelTweakConstructor(void) {
     JodelTweakInstallHooks();
+    // Ban detection + fresh-account recovery ("unban").
+    // See JodelTweakProtection.m and PROTECTION.md.
+    JodelTweakInstallProtection();
 }
