@@ -1,0 +1,32 @@
+name: Build JodelTweak dylib
+# Compiles the Private Notes tweak (JodelTweak.dylib) for arm64 iOS.
+# Trigger: manual (workflow_dispatch) or on push of the tweak source.
+# Output: artifact "JodelTweak-dylib" containing JodelTweak.dylib.
+# This workflow does NOT touch the Jodel Zero SwiftUI app build.
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'jodel-tweak/**'
+jobs:
+  build:
+    runs-on: macos-15-intel
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show Xcode version
+        run: |
+          xcodebuild -version
+          xcode-select -p
+
+      - name: Build dylib (arm64, iOS 16.4+)
+        run: |
+          cd jodel-tweak/src
+          chmod +x build.sh
+          ./build.sh .
+
+      - name: Upload dylib
+        uses: actions/upload-artifact@v4
+        with:
+          name: JodelTweak-dylib
+          path: jodel-tweak/src/JodelTweak.dylib
