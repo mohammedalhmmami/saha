@@ -52,6 +52,7 @@
 //          by Jodel itself on the next launch.
 
 #import "JodelTweakProtection.h"
+#import "JodelTweakFeatures.h"
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
 #import <Security/Security.h>
@@ -62,30 +63,111 @@
 // ---------------------------------------------------------------------------
 static NSString * const kJodelTweakBannedFlagKey = @"com.nebra.jodeltweak.banned.v1";
 static NSString * const kJodelTweakBanAlertShownKey = @"com.nebra.jodeltweak.banAlertShown.v1";
+// Set when the user taps a button on the ban alert ("Create New Account"
+// or "Later"). Until it is set, the alert may be re-presented if it was
+// dismissed without a choice (e.g. the app went to the background).
+static NSString * const kJodelTweakBanChoiceMadeKey = @"com.nebra.jodeltweak.banChoiceMade.v1";
 
 // Jodel's account identity, as found in the v7.199 binary strings.
 static NSString * const kJodelOAuthKeychainService = @"com.go-tellm.tellm.oauth2-credentials";
 static NSString * const kJodelAppGroup = @"group.com.go-tellm.tellm";
 
 // ---------------------------------------------------------------------------
-// Helpers — presenting from wherever the app currently is.
+// The ban alert lives in its OWN UIWindow (the approach Zero uses for
+// its overlay: a separate full-screen window above Jodel's UI).
+//
+// WHY: in v2 the alert was presented on Jodel's own top view controller.
+// Jodel's ban flow then replaced or dismissed that controller (its own
+// ban screen, a feed reload, a navigation reset) and our alert vanished
+// within seconds, before the user could tap anything. A dedicated
+// window sits OUTSIDE Jodel's view-controller hierarchy, so nothing
+// Jodel does to its own screens can dismiss it. The window is held in
+// a static (strong) reference so it is never deallocated while the
+// alert is up, and the alert has no tap-outside-to-dismiss — it stays
+// until the user taps "Create New Account" or "Later".
 // ---------------------------------------------------------------------------
-static UIViewController *JodelTweakTopViewController(void) {
-    UIWindow *keyWindow = nil;
-    if (@available(iOS 13.0, *)) {
-        for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
-            if (scene.activationState != UISceneActivationStateForegroundActive) continue;
-            if (![scene isKindOfClass:[UIWindowScene class]]) continue;
-            for (UIWindow *w in ((UIWindowScene *)scene).windows) {
-                if (w.isKeyWindow) { keyWindow = w; break; }
+static UIWindow *gJodelTweakAlertWindow = nil;
+static __weak UIWindow *gJodelTweakPreviousKeyWindow = nil;
+// Re-presentation guard: at most one re-presentation per foreground.
+static BOOL gJodelTweakAlertRePresentedThisForeground = NO;
+
+// The overlay window's root view controller. A plain controller with an
+// empty, transparent view — it exists only to present our alert from.
+// Its class is also used to keep our own ban watcher from treating our
+// alert as Jodel's ban screen.
+@interface JodelTweakAlertRootViewController : UIViewController
+@end
+
+@implementation JodelTweakAlertRootViewController
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    self.view.backgroundColor = [UIColor clearColor];
+}
+@end
+
+// Creates the overlay window (if needed) and makes it key and visible.
+// Returns its root view controller, or nil if the window could not be made.
+static UIViewController *JodelTweakEnsureAlertWindow(void) {
+    if (!gJodelTweakAlertWindow) {
+        UIWindow *previousKey = [UIApplication sharedApplication].keyWindow;
+        if (!previousKey && @available(iOS 13.0, *)) {
+            for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+                if (scene.activationState != UISceneActivationStateForegroundActive) continue;
+                if (![scene isKindOfClass:[UIWindowScene class]]) continue;
+                for (UIWindow *w in ((UIWindowScene *)scene).windows) {
+                    if (w.isKeyWindow) { previousKey = w; break; }
+                }
+                if (previousKey) break;
             }
-            if (keyWindow) break;
         }
+        gJodelTweakPreviousKeyWindow = previousKey;
+        CGRect frame = [UIScreen mainScreen].bounds;
+        if (previousKey.windowScene) {
+            gJodelTweakAlertWindow = [[UIWindow alloc] initWithWindowScene:previousKey.windowScene];
+        } else {
+            gJodelTweakAlertWindow = [[UIWindow alloc] initWithFrame:frame];
+        }
+        gJodelTweakAlertWindow.frame = frame;
+        // Above Jodel's own alerts (UIWindowLevelAlert) so nothing in
+        // Jodel can cover it.
+        gJodelTweakAlertWindow.windowLevel = UIWindowLevelAlert + 1.0;
+        gJodelTweakAlertWindow.rootViewController =
+            [[JodelTweakAlertRootViewController alloc] init];
+        gJodelTweakAlertWindow.hidden = NO;
     }
-    if (!keyWindow) keyWindow = [UIApplication sharedApplication].keyWindow;
-    UIViewController *vc = keyWindow.rootViewController;
-    while (vc.presentedViewController) vc = vc.presentedViewController;
-    return vc;
+    [gJodelTweakAlertWindow makeKeyAndVisible];
+    return gJodelTweakAlertWindow.rootViewController;
+}
+
+// Hides and destroys the overlay window, restoring Jodel's key window.
+static void JodelTweakDismissAlertWindow(void) {
+    if (!gJodelTweakAlertWindow) return;
+    gJodelTweakAlertWindow.hidden = YES;
+    UIWindow *windowToDestroy = gJodelTweakAlertWindow;
+    gJodelTweakAlertWindow = nil;
+    UIWindow *previousKey = gJodelTweakPreviousKeyWindow;
+    gJodelTweakPreviousKeyWindow = nil;
+    if (previousKey) {
+        [previousKey makeKeyAndVisible];
+    }
+    (void)windowToDestroy;
+}
+
+// Presents an alert from the overlay window's root view controller.
+static void JodelTweakPresentAlertInOverlayWindow(UIAlertController *alert) {
+    UIViewController *root = JodelTweakEnsureAlertWindow();
+    if (!root) return;
+    // If an alert is already showing in the overlay, do not stack another.
+    if (root.presentedViewController) return;
+    [root presentViewController:alert animated:YES completion:nil];
+}
+
+static BOOL JodelTweakBanChoiceMade(void) {
+    return [[NSUserDefaults standardUserDefaults] boolForKey:kJodelTweakBanChoiceMadeKey];
+}
+
+static void JodelTweakSetBanChoiceMade(BOOL made) {
+    [[NSUserDefaults standardUserDefaults] setBool:made forKey:kJodelTweakBanChoiceMadeKey];
 }
 
 static BOOL JodelTweakIsBanned(void) {
@@ -203,6 +285,7 @@ static void JodelTweakWipeLocalIdentity(void) {
         // 5. Clear our own ban flags (the new account starts clean).
         JodelTweakSetBanned(NO);
         [defaults removeObjectForKey:kJodelTweakBanAlertShownKey];
+        [defaults removeObjectForKey:kJodelTweakBanChoiceMadeKey];
         [defaults synchronize];
     } @catch (NSException *e) {
         // Wiping must never crash the app. If part of it failed, the
@@ -211,32 +294,53 @@ static void JodelTweakWipeLocalIdentity(void) {
 }
 
 // ---------------------------------------------------------------------------
-// The ban alert — shown once when a ban is detected.
+// The ban alert — shown in our OWN overlay window, and it STAYS until
+// the user taps a button.
+//
+// Behaviour:
+//   - Presented from the overlay window's root view controller, never
+//     from a Jodel view controller, so Jodel's own navigation, ban
+//     screen or feed reload cannot dismiss it.
+//   - No tap-outside-to-dismiss and no auto-dismiss: UIAlertController
+//     does not dismiss on outside taps, and nothing in our code dismisses
+//     it on a timer.
+//   - "Create New Account" marks the choice, wipes the account, then
+//     shows a restart alert (also in the overlay window) and exits.
+//   - "Later" marks the choice and destroys the overlay window. The
+//     alert is not shown again for this ban.
+//   - If the alert window is somehow gone without a choice (e.g. the
+//     app went to the background), it is re-presented when the app
+//     becomes active again — at most once per foreground (see
+//     JodelTweakAppDidBecomeActive below).
+//   - Respects the toggles: if the master switch or Ban Detection is
+//     OFF, no alert appears at all.
 // ---------------------------------------------------------------------------
 static void JodelTweakShowBanAlert(void) {
     if (![NSThread isMainThread]) {
         dispatch_async(dispatch_get_main_queue(), ^{ JodelTweakShowBanAlert(); });
         return;
     }
-    // Show only once per ban (until the flags are cleared by a wipe).
-    if ([[NSUserDefaults standardUserDefaults] boolForKey:kJodelTweakBanAlertShownKey]) return;
+    // Respect the toggles: no alert when the tweak or Ban Detection is off.
+    if (!JodelTweakIsEnabled() || !JodelTweakBanDetectionEnabled()) return;
+    // The user already chose for this ban — do not show it again.
+    if (JodelTweakBanChoiceMade()) return;
+    // Already showing in the overlay window — do not stack another.
+    if (gJodelTweakAlertWindow && gJodelTweakAlertWindow.rootViewController.presentedViewController) return;
     [[NSUserDefaults standardUserDefaults] setBool:YES forKey:kJodelTweakBanAlertShownKey];
-
-    UIViewController *top = JodelTweakTopViewController();
-    if (!top) return;
 
     UIAlertController *alert =
         [UIAlertController alertControllerWithTitle:@"تم حظر الحساب"
                                             message:@"تم حظر حسابك في Jodel. هل تريد إنشاء حساب جديد؟\nسيتم مسح بيانات التطبيق الحالية (الحساب والتوكنات والإعدادات المحلية). ملاحظاتك الخاصة محفوظة ولن تُمسح.\n\nتنبيه: هذا لا يرفع الحظر عن الحساب القديم — بل ينشئ حساباً جديداً، وستفقد كارما الحساب القديم ومنشوراته."
                                      preferredStyle:UIAlertControllerStyleAlert];
-    __weak typeof(alert) weakAlert = alert;
     UIAlertAction *create =
         [UIAlertAction actionWithTitle:@"إنشاء حساب جديد"
                                  style:UIAlertActionStyleDestructive
                                handler:^(UIAlertAction *action) {
-            (void)weakAlert;
+            JodelTweakSetBanChoiceMade(YES);
             JodelTweakWipeLocalIdentity();
             // Restart the app so Jodel creates the fresh account.
+            // This alert is also shown in the overlay window, so it
+            // cannot be dismissed by Jodel either.
             UIAlertController *restartAlert =
                 [UIAlertController alertControllerWithTitle:@"تم مسح بيانات الحساب"
                                                     message:@"سيتم إغلاق التطبيق الآن. افتحه مجدداً وسيتم إنشاء حساب جديد تلقائياً."
@@ -248,20 +352,41 @@ static void JodelTweakShowBanAlert(void) {
                     (void)a;
                     exit(0);
                 }]];
-            UIViewController *topVC = JodelTweakTopViewController();
-            if (topVC) [topVC presentViewController:restartAlert animated:YES completion:nil];
-            else exit(0);
+            JodelTweakPresentAlertInOverlayWindow(restartAlert);
         }];
     [alert addAction:create];
     [alert addAction:[UIAlertAction actionWithTitle:@"لاحقاً"
                                               style:UIAlertActionStyleCancel
-                                            handler:nil]];
-    [top presentViewController:alert animated:YES completion:nil];
+                                            handler:^(UIAlertAction *action) {
+        JodelTweakSetBanChoiceMade(YES);
+        JodelTweakDismissAlertWindow();
+    }]];
+    JodelTweakPresentAlertInOverlayWindow(alert);
+}
+
+// Re-present the alert when the app becomes active again, but only if
+// the ban is still present, the user has not chosen yet, and the alert
+// is not already showing. At most once per foreground: the flag is
+// reset when the app enters the background.
+static void JodelTweakAppDidBecomeActive(void) {
+    if (gJodelTweakAlertRePresentedThisForeground) return;
+    if (!JodelTweakIsBanned()) return;
+    if (JodelTweakBanChoiceMade()) return;
+    if (!JodelTweakIsEnabled() || !JodelTweakBanDetectionEnabled()) return;
+    if (gJodelTweakAlertWindow && gJodelTweakAlertWindow.rootViewController.presentedViewController) return;
+    gJodelTweakAlertRePresentedThisForeground = YES;
+    dispatch_async(dispatch_get_main_queue(), ^{ JodelTweakShowBanAlert(); });
+}
+
+static void JodelTweakAppDidEnterBackground(void) {
+    gJodelTweakAlertRePresentedThisForeground = NO;
 }
 
 // Called (on any queue) when a ban signal is seen. Sets the flag and
-// shows the alert once.
+// shows the alert once. Respects the toggles: if the master switch or
+// Ban Detection is OFF, no flag is set and no alert appears.
 static void JodelTweakOnBanDetected(void) {
+    if (!JodelTweakIsEnabled() || !JodelTweakBanDetectionEnabled()) return;
     if (JodelTweakIsBanned()) {
         // Already flagged — still make sure the alert was offered.
         dispatch_async(dispatch_get_main_queue(), ^{ JodelTweakShowBanAlert(); });
@@ -316,6 +441,10 @@ typedef void (^JodelTweakDataCompletion)(NSData *data, NSURLResponse *response, 
 
 - (NSURLSessionDataTask *)jodelTweak_dataTaskWithRequest:(NSURLRequest *)request
                                        completionHandler:(JodelTweakDataCompletion)completionHandler {
+    // Feature off → pass through unwrapped (the hook becomes a no-op).
+    if (!JodelTweakIsEnabled() || !JodelTweakBanDetectionEnabled()) {
+        return [self jodelTweak_dataTaskWithRequest:request completionHandler:completionHandler];
+    }
     BOOL isJodel = JodelTweakRequestIsJodelAPI(request);
     JodelTweakDataCompletion wrapped = nil;
     if (isJodel && completionHandler) {
@@ -339,6 +468,10 @@ typedef void (^JodelTweakDataCompletion)(NSData *data, NSURLResponse *response, 
 
 - (NSURLSessionDataTask *)jodelTweak_dataTaskWithURL:(NSURL *)url
                                    completionHandler:(JodelTweakDataCompletion)completionHandler {
+    // Feature off → pass through unwrapped (the hook becomes a no-op).
+    if (!JodelTweakIsEnabled() || !JodelTweakBanDetectionEnabled()) {
+        return [self jodelTweak_dataTaskWithURL:url completionHandler:completionHandler];
+    }
     NSURLRequest *request = [NSURLRequest requestWithURL:url];
     BOOL isJodel = JodelTweakRequestIsJodelAPI(request);
     JodelTweakDataCompletion wrapped = nil;
@@ -388,6 +521,10 @@ typedef void (^JodelTweakDataCompletion)(NSData *data, NSURLResponse *response, 
                                 completion:completion];
     // Then inspect what was presented.
     @try {
+        // Never treat OUR OWN overlay window's presentations as a ban
+        // signal — our alert's title contains "حظر" but not "banned",
+        // and the check below is a second guard anyway.
+        if ([self isKindOfClass:[JodelTweakAlertRootViewController class]]) return;
         if (![viewControllerToPresent isKindOfClass:[UIAlertController class]]) return;
         UIAlertController *alert = (UIAlertController *)viewControllerToPresent;
         NSString *combined = [NSString stringWithFormat:@"%@ %@",
@@ -425,6 +562,28 @@ static BOOL JodelTweakSwizzle(Class cls, SEL originalSel, SEL swizzledSel) {
 
 void JodelTweakInstallProtection(void) {
     @try {
+        // Re-present the ban alert if it was dismissed without a choice
+        // (e.g. the app went to the background). At most once per
+        // foreground; the flag is reset on background.
+        static dispatch_once_t onceToken;
+        dispatch_once(&onceToken, ^{
+            [[NSNotificationCenter defaultCenter]
+                addObserverForName:UIApplicationDidBecomeActiveNotification
+                            object:nil
+                             queue:[NSOperationQueue mainQueue]
+                        usingBlock:^(NSNotification *note) {
+                (void)note;
+                JodelTweakAppDidBecomeActive();
+            }];
+            [[NSNotificationCenter defaultCenter]
+                addObserverForName:UIApplicationDidEnterBackgroundNotification
+                            object:nil
+                             queue:[NSOperationQueue mainQueue]
+                        usingBlock:^(NSNotification *note) {
+                (void)note;
+                JodelTweakAppDidEnterBackground();
+            }];
+        });
         // Detection 1 — NSURLSession response inspection.
         // The swizzled implementations live in our own category on
         // NSURLSession, so both methods are found on the same class.

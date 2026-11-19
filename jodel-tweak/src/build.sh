@@ -21,7 +21,8 @@ xcrun clang \
   -framework UIKit \
   -framework Security \
   -o "$OUT_DIR/JodelTweak.dylib" \
-  JodelTweak.m JodelTweakProtection.m
+  JodelTweak.m JodelTweakProtection.m JodelTweakSettings.m \
+  JodelTweakBookmarks.m JodelTweakDrafts.m JodelTweakQuickReplies.m
 echo "Built: $OUT_DIR/JodelTweak.dylib"
 file "$OUT_DIR/JodelTweak.dylib"
 ls -lh "$OUT_DIR/JodelTweak.dylib"

@@ -1,42 +1,46 @@
-// JodelTweak.m — Private Notes tweak for Jodel v7.199
+// JodelTweak.m — Private Notes tweak for Jodel v7.199 (plus Bookmarks,
+// Drafts, Quick Replies and the Tweak Settings screen).
 //
 // WHAT THIS IS:
 //   A brand-new, original tweak written from scratch for the user's
-//   original Jodel v7.199 IPA. It adds ONE completely new feature that
-//   does not exist in Jodel and is not one of Zero's features:
+//   original Jodel v7.199 IPA. It adds NEW features that do not exist
+//   in Jodel and are not one of Zero's features:
 //
 //     Private Notes ("My Notes") — a personal notebook inside Jodel.
-//     Users can write, view and delete private notes. Notes are stored
-//     only on the device (NSUserDefaults). No network, no account, no
-//     data collection, no activation code, no login, no paywall.
+//     Bookmarks (المفضلة) — save posts from the context menu.
+//     Drafts (المسودات) — save a compose text before sending.
+//     Quick Replies (ردود سريعة) — user-defined reply templates.
+//     Tweak Settings — an on/off switch for every feature.
+//
+//   Notes, bookmarks, drafts and reply templates are stored only on
+//   the device (NSUserDefaults). No network, no account, no data
+//   collection, no activation code, no login, no paywall.
 //
 // HOW IT WORKS (mechanism, learned from studying swizzling in general):
 //   The dylib is loaded by dyld when Jodel launches (via an
 //   LC_LOAD_DYLIB entry added to the Jodel binary). Its constructor
 //   runs before Jodel's UI appears. It uses plain Objective-C runtime
 //   method swizzling — method_exchangeImplementations + NSClassFromString
-//   — to hook ONE method:
-//     Jodel.MainFeedViewController.viewDidLoad
-//   The swizzled implementation calls the original viewDidLoad, then
-//   adds a "Notes" button to the feed's navigation bar. Tapping it
-//   presents the Notes screen (written from scratch in this file).
+//   — to hook:
+//     Jodel.MainFeedViewController.viewWillAppear:  (feed buttons)
+//   and installs the Bookmarks, Drafts and Quick Replies hooks from
+//   their own files, plus the ban detection from JodelTweakProtection.
+//   The swizzled viewWillAppear: calls the original, then SYNCES the
+//   feed buttons on every appearance, so a feature turned OFF in the
+//   Tweak Settings disappears from the feed, and turning it back ON
+//   brings it back.
 //
 // SAFETY:
 //   - Every lookup is guarded: if the class or the method does not
 //     exist at runtime, the hook is skipped silently (no crash).
 //   - The hook installation is wrapped in @try/@catch.
-//   - The button is added only once per view controller (tracked with
-//     an associated object), so viewDidLoad being called again is safe.
 //   - The tweak never modifies Jodel's data, never touches the network,
 //     never reads the user's posts or account. It only writes the user's
-//     own notes to NSUserDefaults under its own key.
+//     own notes, bookmarks, drafts and reply templates to NSUserDefaults
+//     under its own keys.
 //   - If the dylib is removed, Jodel runs exactly as before.
 //
 // BUILD (on a Mac with Xcode, or via the GitHub Actions workflow):
-//   clang -arch arm64 -isysroot $(xcrun --sdk iphoneos --show-sdk-path)
-//         -miphoneos-version-min=16.4 -fobjc-arc -dynamiclib
-//         -framework Foundation -framework UIKit
-//         -o JodelTweak.dylib JodelTweak.m
 //   See build.sh in this folder for the exact command, and
 //   .github/workflows/build-tweak.yml for the CI build.
 //
@@ -46,12 +50,12 @@
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
 #import "JodelTweakProtection.h"
+#import "JodelTweakFeatures.h"
 
 // ---------------------------------------------------------------------------
 // Storage key (our own namespace — never touches Jodel's keys).
 // ---------------------------------------------------------------------------
 static NSString * const kJodelTweakNotesKey = @"com.nebra.jodeltweak.notes.v1";
-static NSString * const kJodelTweakButtonInstalledKey = @"com.nebra.jodeltweak.buttonInstalled";
 
 // ---------------------------------------------------------------------------
 // NotesStore — the user's private notes, kept in NSUserDefaults.
@@ -135,14 +139,27 @@ static NSString * const kJodelTweakButtonInstalledKey = @"com.nebra.jodeltweak.b
     self.title = @"My Notes";
     self.notes = [JodelTweakNotesStore allNotes];
     [self.tableView registerClass:[UITableViewCell class] forCellReuseIdentifier:@"NoteCell"];
-    self.navigationItem.rightBarButtonItem =
+    self.navigationItem.rightBarButtonItems = @[
         [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemAdd
                                                       target:self
-                                                      action:@selector(addNoteTapped)];
+                                                      action:@selector(addNoteTapped)],
+        [[UIBarButtonItem alloc] initWithImage:[UIImage systemImageNamed:@"gear"]
+                                         style:UIBarButtonItemStylePlain
+                                        target:self
+                                        action:@selector(settingsTapped)],
+    ];
     self.navigationItem.leftBarButtonItem =
         [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemDone
                                                       target:self
                                                       action:@selector(doneTapped)];
+}
+
+- (void)settingsTapped {
+    JodelTweakSettingsViewController *settingsVC =
+        [[JodelTweakSettingsViewController alloc] initWithStyle:UITableViewStyleGrouped];
+    UINavigationController *nav =
+        [[UINavigationController alloc] initWithRootViewController:settingsVC];
+    [self presentViewController:nav animated:YES completion:nil];
 }
 
 - (void)viewWillAppear:(BOOL)animated {
@@ -237,22 +254,23 @@ static NSString * const kJodelTweakButtonInstalledKey = @"com.nebra.jodeltweak.b
 @end
 
 // ---------------------------------------------------------------------------
-// Hook — add a "Notes" button to the Main Feed's navigation bar.
+// Feed buttons — "Notes" and "Bookmarks" in the Main Feed's navigation bar.
 //
 // Target (identified by static analysis of the v7.199 binary; see
 // HOOK_TARGETS.md): the feed view controller. Its Swift ObjC name is
 // "Jodel.MainFeedViewController". We try that first, then the bare name.
-// We hook -viewDidLoad, call the original, then add the button once.
+// We hook -viewWillAppear: (not viewDidLoad) so the buttons are SYNCED
+// on every appearance: if the user turns a feature OFF in the Tweak
+// Settings, its button disappears the next time the feed appears; if
+// they turn it back ON, the button comes back. The buttons are stored
+// as associated objects on the view controller so the exact same
+// instances are re-added (never duplicated) and removed cleanly.
 // ---------------------------------------------------------------------------
-static void JodelTweakAddNotesButton(UIViewController *vc) {
-    if (!vc || !vc.navigationItem) return;
-    // Add only once per view controller instance.
-    NSNumber *installed = objc_getAssociatedObject(vc, (__bridge const void *)kJodelTweakButtonInstalledKey);
-    if ([installed boolValue]) return;
-    objc_setAssociatedObject(vc, (__bridge const void *)kJodelTweakButtonInstalledKey,
-                             @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+static NSString * const kJodelTweakNotesButtonKey = @"com.nebra.jodeltweak.notesButton";
+static NSString * const kJodelTweakBookmarksButtonKey = @"com.nebra.jodeltweak.bookmarksButton";
 
-    UIBarButtonItem *notesButton;
+static UIBarButtonItem *JodelTweakMakeNotesButton(UIViewController *vc) {
+    UIBarButtonItem *notesButton = nil;
     if (@available(iOS 13.0, *)) {
         UIImage *icon = [UIImage systemImageNamed:@"note.text"];
         notesButton = [[UIBarButtonItem alloc] initWithImage:icon
@@ -266,16 +284,64 @@ static void JodelTweakAddNotesButton(UIViewController *vc) {
                                                       action:@selector(jodelTweak_openNotes)];
     }
     notesButton.accessibilityLabel = @"My Notes";
-    NSMutableArray *items = [vc.navigationItem.rightBarButtonItems mutableCopy];
-    if (!items) items = [NSMutableArray array];
-    [items addObject:notesButton];
+    return notesButton;
+}
+
+static UIBarButtonItem *JodelTweakMakeBookmarksButton(UIViewController *vc) {
+    UIBarButtonItem *bookmarksButton = nil;
+    if (@available(iOS 13.0, *)) {
+        UIImage *icon = [UIImage systemImageNamed:@"bookmark"];
+        bookmarksButton = [[UIBarButtonItem alloc] initWithImage:icon
+                                                           style:UIBarButtonItemStylePlain
+                                                          target:vc
+                                                          action:@selector(jodelTweak_openBookmarks)];
+    } else {
+        bookmarksButton = [[UIBarButtonItem alloc] initWithTitle:@"المفضلة"
+                                                           style:UIBarButtonItemStylePlain
+                                                          target:vc
+                                                          action:@selector(jodelTweak_openBookmarks)];
+    }
+    bookmarksButton.accessibilityLabel = @"Bookmarks";
+    return bookmarksButton;
+}
+
+// Rebuild the feed's right bar button items: keep Jodel's own items,
+// then append our buttons only for the features that are ON.
+static void JodelTweakSyncFeedButtons(UIViewController *vc) {
+    if (!vc || !vc.navigationItem) return;
+    BOOL showNotes = JodelTweakIsEnabled() && JodelTweakNotesEnabled();
+    BOOL showBookmarks = JodelTweakIsEnabled() && JodelTweakBookmarksEnabled();
+
+    UIBarButtonItem *notesButton =
+        objc_getAssociatedObject(vc, (__bridge const void *)kJodelTweakNotesButtonKey);
+    UIBarButtonItem *bookmarksButton =
+        objc_getAssociatedObject(vc, (__bridge const void *)kJodelTweakBookmarksButtonKey);
+    if (showNotes && !notesButton) {
+        notesButton = JodelTweakMakeNotesButton(vc);
+        objc_setAssociatedObject(vc, (__bridge const void *)kJodelTweakNotesButtonKey,
+                                 notesButton, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    if (showBookmarks && !bookmarksButton) {
+        bookmarksButton = JodelTweakMakeBookmarksButton(vc);
+        objc_setAssociatedObject(vc, (__bridge const void *)kJodelTweakBookmarksButtonKey,
+                                 bookmarksButton, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+
+    NSMutableArray *items = [NSMutableArray array];
+    for (UIBarButtonItem *item in vc.navigationItem.rightBarButtonItems) {
+        if (item == notesButton || item == bookmarksButton) continue;
+        [items addObject:item];
+    }
+    if (showNotes && notesButton) [items addObject:notesButton];
+    if (showBookmarks && bookmarksButton) [items addObject:bookmarksButton];
     vc.navigationItem.rightBarButtonItems = items;
 }
 
-// The action the Notes button calls. Implemented as a category method so it
-// can be attached to the feed view controller without subclassing it.
+// The actions the feed buttons call. Implemented as category methods so
+// they can be attached to the feed view controller without subclassing.
 @interface UIViewController (JodelTweakNotes)
 - (void)jodelTweak_openNotes;
+- (void)jodelTweak_openBookmarks;
 @end
 
 @implementation UIViewController (JodelTweakNotes)
@@ -288,22 +354,33 @@ static void JodelTweakAddNotesButton(UIViewController *vc) {
     [self presentViewController:nav animated:YES completion:nil];
 }
 
+- (void)jodelTweak_openBookmarks {
+    JodelTweakBookmarksViewController *bookmarksVC =
+        [[JodelTweakBookmarksViewController alloc] initWithStyle:UITableViewStylePlain];
+    UINavigationController *nav =
+        [[UINavigationController alloc] initWithRootViewController:bookmarksVC];
+    [self presentViewController:nav animated:YES completion:nil];
+}
+
 @end
 
-// The swizzled viewDidLoad. After method_exchangeImplementations, calling
-// [self jodelTweak_viewDidLoad] invokes the ORIGINAL viewDidLoad.
+// The swizzled viewWillAppear:. After method_exchangeImplementations,
+// calling [self jodelTweak_viewWillAppear:] invokes the ORIGINAL.
 @interface NSObject (JodelTweakSwizzle)
-- (void)jodelTweak_viewDidLoad;
+- (void)jodelTweak_viewWillAppear:(BOOL)animated;
 @end
 
 @implementation NSObject (JodelTweakSwizzle)
 
-- (void)jodelTweak_viewDidLoad {
-    // Call the original viewDidLoad (swapped in by method_exchangeImplementations).
-    [self jodelTweak_viewDidLoad];
-    // Then add our button — only for view controllers, and only once.
+- (void)jodelTweak_viewWillAppear:(BOOL)animated {
+    // Call the original viewWillAppear (swapped in by the exchange).
+    [self jodelTweak_viewWillAppear:animated];
+    // Then sync our buttons — only for view controllers.
     if ([self isKindOfClass:[UIViewController class]]) {
-        JodelTweakAddNotesButton((UIViewController *)self);
+        @try {
+            JodelTweakSyncFeedButtons((UIViewController *)self);
+        } @catch (NSException *e) {
+        }
     }
 }
 
@@ -325,15 +402,15 @@ static void JodelTweakInstallHooks(void) {
         }
         if (!targetClass) return;  // class not present — skip silently, no crash.
 
-        SEL originalSel = @selector(viewDidLoad);
-        SEL swizzledSel = @selector(jodelTweak_viewDidLoad);
+        SEL originalSel = @selector(viewWillAppear:);
+        SEL swizzledSel = @selector(jodelTweak_viewWillAppear:);
         Method originalMethod = class_getInstanceMethod(targetClass, originalSel);
         Method swizzledMethod = class_getInstanceMethod([NSObject class], swizzledSel);
         if (!originalMethod || !swizzledMethod) return;
 
-        // If the class does not implement viewDidLoad itself (it inherits it
-        // from UIViewController), add our method first so the exchange only
-        // affects this class, not UIViewController globally.
+        // If the class does not implement viewWillAppear itself (it
+        // inherits it from UIViewController), add our method first so
+        // the exchange only affects this class, not UIViewController.
         BOOL didAdd = class_addMethod(targetClass, originalSel,
                                       method_getImplementation(swizzledMethod),
                                       method_getTypeEncoding(swizzledMethod));
@@ -355,4 +432,9 @@ static void JodelTweakConstructor(void) {
     // Ban detection + fresh-account recovery ("unban").
     // See JodelTweakProtection.m and PROTECTION.md.
     JodelTweakInstallProtection();
+    // Bookmarks, Drafts and Quick Replies (each checks its own toggle
+    // at runtime, so turning a feature off disables it immediately).
+    JodelTweakInstallBookmarksHooks();
+    JodelTweakInstallDraftsHooks();
+    JodelTweakInstallQuickRepliesHooks();
 }
