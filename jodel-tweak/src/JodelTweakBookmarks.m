@@ -247,13 +247,21 @@ static NSDictionary *JodelTweakPostDataFromCell(UITableViewCell *cell) {
 
     // Wrap the original configuration, appending our save action.
     // The original menu's children are kept exactly as Jodel built them.
+    // NOTE: UIContextMenuConfiguration does NOT expose previewProvider /
+    // actionProvider as readable properties in the public UIKit API (only
+    // `identifier` has a getter), so the original blocks are read via KVC
+    // — they are stored in ivars by the initializer.
+    UIContextMenuActionProvider originalProvider = nil;
+    @try { originalProvider = [original valueForKey:@"actionProvider"]; } @catch (NSException *e) {}
+    UIContextMenuContentPreviewProvider originalPreview = nil;
+    @try { originalPreview = [original valueForKey:@"previewProvider"]; } @catch (NSException *e) {}
     UIContextMenuConfiguration *wrapped =
         [UIContextMenuConfiguration configurationWithIdentifier:original.identifier
-                                                previewProvider:original.previewProvider
+                                                previewProvider:originalPreview
                                                   actionProvider:^UIMenu * _Nullable(NSArray<UIMenuElement *> * _Nonnull suggestedActions) {
             UIMenu *originalMenu = nil;
-            if (original.actionProvider) {
-                @try { originalMenu = original.actionProvider(suggestedActions); } @catch (NSException *e) {}
+            if (originalProvider) {
+                @try { originalMenu = originalProvider(suggestedActions); } @catch (NSException *e) {}
             }
             UIAction *saveAction =
                 [UIAction actionWithTitle:@"حفظ في المفضلة"
