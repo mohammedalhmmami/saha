@@ -17,6 +17,7 @@
 BOOL JodelTweakIsEnabled(void);
 BOOL JodelTweakNotesEnabled(void);
 BOOL JodelTweakBanDetectionEnabled(void);
+BOOL JodelTweakHidingEnabled(void);
 BOOL JodelTweakBookmarksEnabled(void);
 BOOL JodelTweakDraftsEnabled(void);
 BOOL JodelTweakQuickRepliesEnabled(void);
@@ -24,6 +25,7 @@ BOOL JodelTweakQuickRepliesEnabled(void);
 void JodelTweakSetEnabled(BOOL enabled);
 void JodelTweakSetNotesEnabled(BOOL enabled);
 void JodelTweakSetBanDetectionEnabled(BOOL enabled);
+void JodelTweakSetHidingEnabled(BOOL enabled);
 void JodelTweakSetBookmarksEnabled(BOOL enabled);
 void JodelTweakSetDraftsEnabled(BOOL enabled);
 void JodelTweakSetQuickRepliesEnabled(BOOL enabled);
@@ -87,6 +89,11 @@ UITextField *JodelTweakFindTextFieldInView(UIView *view);
 void JodelTweakInstallBookmarksHooks(void);
 void JodelTweakInstallDraftsHooks(void);
 void JodelTweakInstallQuickRepliesHooks(void);
+
+// Hiding hooks (JodelTweakHiding.m): setIsBanned: forced to NO and
+// TweakInject returning "clean". Installed at load time; respects the
+// master toggle and the hiding toggle (both default ON).
+void JodelTweakInstallHiding(void);
 
 // Opens Jodel's compose screen with the given text pre-filled. If the
 // compose screen cannot be opened or the text cannot be inserted, the

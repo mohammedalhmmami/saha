@@ -50,6 +50,7 @@
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
 #import "JodelTweakProtection.h"
+#import "JodelTweakHiding.h"
 #import "JodelTweakFeatures.h"
 
 // ---------------------------------------------------------------------------
@@ -432,6 +433,10 @@ static void JodelTweakConstructor(void) {
     // Ban detection + fresh-account recovery ("unban").
     // See JodelTweakProtection.m and PROTECTION.md.
     JodelTweakInstallProtection();
+    // Hiding: force the local ban flag to NO and make Jodel's
+    // tweak-injection check return "clean". See JodelTweakHiding.m
+    // and HIDING.md (the decryption report).
+    JodelTweakInstallHiding();
     // Bookmarks, Drafts and Quick Replies (each checks its own toggle
     // at runtime, so turning a feature off disables it immediately).
     JodelTweakInstallBookmarksHooks();

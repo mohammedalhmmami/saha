@@ -26,6 +26,7 @@
 static NSString * const kJodelTweakEnabledKey = @"com.nebra.jodeltweak.enabled";
 static NSString * const kJodelTweakNotesEnabledKey = @"com.nebra.jodeltweak.notesEnabled";
 static NSString * const kJodelTweakBanDetectionEnabledKey = @"com.nebra.jodeltweak.banDetectionEnabled";
+static NSString * const kJodelTweakHidingEnabledKey = @"com.nebra.jodeltweak.hidingEnabled";
 static NSString * const kJodelTweakBookmarksEnabledKey = @"com.nebra.jodeltweak.bookmarksEnabled";
 static NSString * const kJodelTweakDraftsEnabledKey = @"com.nebra.jodeltweak.draftsEnabled";
 static NSString * const kJodelTweakQuickRepliesEnabledKey = @"com.nebra.jodeltweak.quickRepliesEnabled";
@@ -40,6 +41,7 @@ static BOOL JodelTweakBoolForKey(NSString *key) {
 BOOL JodelTweakIsEnabled(void) { return JodelTweakBoolForKey(kJodelTweakEnabledKey); }
 BOOL JodelTweakNotesEnabled(void) { return JodelTweakBoolForKey(kJodelTweakNotesEnabledKey); }
 BOOL JodelTweakBanDetectionEnabled(void) { return JodelTweakBoolForKey(kJodelTweakBanDetectionEnabledKey); }
+BOOL JodelTweakHidingEnabled(void) { return JodelTweakBoolForKey(kJodelTweakHidingEnabledKey); }
 BOOL JodelTweakBookmarksEnabled(void) { return JodelTweakBoolForKey(kJodelTweakBookmarksEnabledKey); }
 BOOL JodelTweakDraftsEnabled(void) { return JodelTweakBoolForKey(kJodelTweakDraftsEnabledKey); }
 BOOL JodelTweakQuickRepliesEnabled(void) { return JodelTweakBoolForKey(kJodelTweakQuickRepliesEnabledKey); }
@@ -52,6 +54,9 @@ void JodelTweakSetNotesEnabled(BOOL enabled) {
 }
 void JodelTweakSetBanDetectionEnabled(BOOL enabled) {
     [[NSUserDefaults standardUserDefaults] setBool:enabled forKey:kJodelTweakBanDetectionEnabledKey];
+}
+void JodelTweakSetHidingEnabled(BOOL enabled) {
+    [[NSUserDefaults standardUserDefaults] setBool:enabled forKey:kJodelTweakHidingEnabledKey];
 }
 void JodelTweakSetBookmarksEnabled(BOOL enabled) {
     [[NSUserDefaults standardUserDefaults] setBool:enabled forKey:kJodelTweakBookmarksEnabledKey];
@@ -139,7 +144,7 @@ UITextField *JodelTweakFindTextFieldInView(UIView *view) {
 }
 
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
-    if (section == 0) return 6;   // the six toggles
+    if (section == 0) return 7;   // the seven toggles
     return 3;                     // Bookmarks / Drafts / Quick Replies
 }
 
@@ -149,12 +154,12 @@ UITextField *JodelTweakFindTextFieldInView(UIView *view) {
 }
 
 - (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
-    if (section == 0) return @"إيقاف «تفعيل الإضافات» يوقف كل شيء: لا زر ملاحظات، لا كشف حظر، لا تنبيه حظر.";
+    if (section == 0) return @"إيقاف «تفعيل الإضافات» يوقف كل شيء: لا زر ملاحظات، لا كشف حظر، لا تنبيه حظر، لا إخفاء. إيقاف «إخفاء الإضافات» وحده يترك الكشف يعمل لكن جودل قد يكتشف التعديل بسرعة.";
     return @"المفضلة والمسودات والردود السريعة محفوظة على جهازك فقط.";
 }
 
 // Toggle rows: tag 0 = master, 1 = notes, 2 = ban detection,
-// 3 = bookmarks, 4 = drafts, 5 = quick replies.
+// 3 = bookmarks, 4 = drafts, 5 = quick replies, 6 = hiding.
 - (UITableViewCell *)toggleCellForRow:(NSInteger)row {
     UITableViewCell *cell =
         [self.tableView dequeueReusableCellWithIdentifier:@"ToggleCell"];
@@ -198,6 +203,12 @@ UITextField *JodelTweakFindTextFieldInView(UIView *view) {
             sw.on = JodelTweakQuickRepliesEnabled();
             sw.enabled = masterOn;
             break;
+        case 6:
+            cell.textLabel.text = @"إخفاء الإضافات";
+            cell.detailTextLabel.text = @"يخفي التعديل عن كشف جودل (يُفعَّل من الإقلاع التالي)";
+            sw.on = JodelTweakHidingEnabled();
+            sw.enabled = masterOn;
+            break;
         default:
             break;
     }
@@ -218,6 +229,7 @@ UITextField *JodelTweakFindTextFieldInView(UIView *view) {
         case 3: JodelTweakSetBookmarksEnabled(sender.isOn); break;
         case 4: JodelTweakSetDraftsEnabled(sender.isOn); break;
         case 5: JodelTweakSetQuickRepliesEnabled(sender.isOn); break;
+        case 6: JodelTweakSetHidingEnabled(sender.isOn); break;
         default: break;
     }
 }
