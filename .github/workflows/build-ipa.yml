@@ -43,7 +43,7 @@ jobs:
         run: |
           cd Saha
           APP=$(find build/Release-iphoneos -maxdepth 1 -name "*.app" 2>/dev/null | head -n 1)
-          APP=$(find DerivedData/Build/Products/Release-iphoneos -maxdepth 1 -name "*.app" 2>/dev/null | head -n 1)
+          if [ -z "$APP" ]; then APP=$(find DerivedData/Build/Products/Release-iphoneos -maxdepth 1 -name "*.app" 2>/dev/null | head -n 1); fi
           if [ -z "$APP" ]; then APP=$(find ~/Library/Developer/Xcode/DerivedData -name "Saha.app" -path "*Release-iphoneos*" 2>/dev/null | head -n 1); fi
           test -n "$APP" || { echo "ERROR: no .app found"; find ~/Library/Developer/Xcode/DerivedData -maxdepth 3 -type d -name "*Saha*" | head -20; exit 1; }
           echo "APP=$APP"
